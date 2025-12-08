@@ -49,6 +49,13 @@ function ising_PBC_MPO(::Type{T}; hz::Real=1.0, hx::Real=0.0)::MPO_PBC_uniform{T
     (hB, hM)
 end
 
+function ising_APBC_MPO(::Type{T}; hz::Real=1.0, hx::Real=0.0)::MPO_PBC_uniform{T} where {T}
+    hB, hM = ising_PBC_MPO(T; hz=hz, hx=hx)
+    hB_twisted = copy(hB)
+    hB_twisted[1] .*= -1
+    (hB_twisted, hM)
+end
+
 function ising_OBC_MPO(::Type{T}; hz::Real=1.0, hx::Real=0.0)::MPO_open_uniform{T} where {T}
     E = Matrix{Float64}(I,2,2)
     X = [0.0 1.0; 1.0 0.0]
@@ -89,6 +96,13 @@ function ising_PBC_MPO_split(::Type{T}; hz::Real=1.0, hx::Real=0.0)::MPO_PBC_uni
     h_B = MPOTensor{T}[hL, hR]
     
     (ising_OBC_MPO(T, hz=hz, hx=hx), h_B)
+end
+
+function ising_APBC_MPO_split(::Type{T}; hz::Real=1.0, hx::Real=0.0)::MPO_PBC_uniform_split{T} where {T}
+    bulk, boundary = ising_PBC_MPO_split(T; hz=hz, hx=hx)
+    twist = MPOTensor{T}[copy(boundary[1]), copy(boundary[2])]
+    twist[1] .*= -1
+    (bulk, twist)
 end
 
 function ising_Hn_MPO_split(::Type{T}, n::Integer, N::Integer; hz::Real=1.0, hx::Real=0.0) where {T}

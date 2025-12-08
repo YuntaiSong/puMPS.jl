@@ -10,6 +10,10 @@ using Optim
 include("MPS.jl")
 using .MPS
 
+# Patch for newer Julia / TensorOperations: define scalar used in MPS.tr
+MPS.scalar(x::Number) = x
+MPS.scalar(x::AbstractArray{T,0}) where {T} = x[]
+
 export puMPState, rand_puMPState, mps_tensor, num_sites, bond_dim, phys_dim, set_mps_tensor!,
        apply_blockTM_l, blockTM_dense,
        expect_nn, expect,
@@ -20,17 +24,23 @@ export MPO_PBC_uniform, MPO_open_uniform, MPO_PBC_uniform_split, MPO_PBC_split
 
 include("states.jl")
 
+include("z2symmetry.jl")
+
 export puMPSTvec, tvec_tensor, momentum, mps_tensors, excitations!, excitations, 
        tangent_space_metric_and_MPO, tangent_space_MPO,
        Hn_in_basis, overlap, fidelity
 
 include("tangentspace.jl")
 
-export ising_local_MPO, ising_PBC_MPO, ising_PBC_MPO_split, ising_OBC_MPO, ising_Hn_MPO_split,
+export ising_local_MPO, ising_PBC_MPO, ising_APBC_MPO, ising_PBC_MPO_split, ising_APBC_MPO_split,
+       ising_OBC_MPO, ising_Hn_MPO_split,
        heis_local_MPO,
        ANNNI_local_MPO, ANNNI_OBC_MPO, ANNNI_PBC_MPO_split, ANNNI_Hn_MPO_split,
        OBF_local_MPO, OBF_OBC_MPO, OBF_PBC_MPO_split, OBF_Hn_MPO_split,
-       potts3_local_MPO, potts3_OBC_MPO, potts3_PBC_MPO_split, potts3_Hn_MPO_split
+       potts3_local_MPO, potts3_OBC_MPO, potts3_PBC_MPO_split, potts3_Hn_MPO_split,
+       ABlocks, BBlocks, build_A_from_blocks, build_B_from_blocks,
+       z2_block_dims, z2_bond_representation, z2_allowed_indices,
+       excitations_parity!, excitations_twisted!
 
 include("models.jl")
 

@@ -817,7 +817,7 @@ function gradient_central(M::puMPState{T}, inv_lambda::AbstractMatrix{T}, d_A::M
     grad_Ac = zero(d_Ac)
     
     if sparse_inverse
-        grad_Ac_init = tensorcopy(grad_Ac_init, [:a,:b,:c], [:a,:c,:b]) # now size (D,D,d)
+        grad_Ac_init = tensorcopy([:a,:b,:c], grad_Ac_init, [:a,:c,:b]) # now size (D,D,d)
         #Split the inverse problem along the physical dimension, since N acts trivially on that factor. Avoids constructing N x I.
         for s in 1:d
             grad_vec = BiCGstab(Nc, vec(view(d_Ac, :,:,s)), vec(view(grad_Ac_init, :,:,s)), tol, max_itr=max_itr)
@@ -837,7 +837,7 @@ function gradient_central(M::puMPState{T}, inv_lambda::AbstractMatrix{T}, d_A::M
     
     norm_grad_A = sqrt(abs(dot(vec(grad_A), vec(d_A))))
     
-    grad_A, norm_grad_A, tensorcopy(grad_Ac, [:a,:b,:c], [:a,:c,:b])
+    grad_A, norm_grad_A, tensorcopy([:a,:b,:c], grad_Ac, [:a,:c,:b])
 end
 
 struct EnergyHighException{T<:Real} <: Exception
@@ -979,7 +979,7 @@ function minimize_energy_local!(M::puMPState{T}, hMPO::MPO_open{T}, maxitr::Inte
         step_corr = min(max(step, 0.001),0.1)
         step, En = line_search_energy(M, En, grad, norm_grad^2, step_corr, hMPO)
         
-        println("$k, $norm_grad, $step, $En, $(En-En_prev)")
+        #println("$k, $norm_grad, $step, $En, $(En-En_prev)")
 
         Anew = mps_tensor(M) .- real(T)(step) .* grad
         set_mps_tensor!(M, Anew)

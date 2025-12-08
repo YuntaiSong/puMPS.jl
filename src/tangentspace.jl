@@ -879,6 +879,57 @@ function tspace_ops_to_center_gauge!(ops::Vector{Array{T,6}}, lambda_i::Matrix{T
     ops
 end
 
+parity_allowed_indices(M::puMPState, parity::Int) =
+    z2_allowed_indices(bond_dim(M), parity; d=phys_dim(M))
+
+function solve_projected_eigs(M::puMPState{T}, Gs::Vector{Array{T,6}},
+                              Heffs::Vector{Array{T,6}}, lambda_i::Matrix{T},
+                              ks::Vector{Tk}, num_states::Vector{<:Integer},
+                              allowed::Vector{Int}; pinv_tol::Real=1e-12) where {T,Tk<:Real}
+    D = bond_dim(M)
+    d = phys_dim(M)
+    par_full = D * d * D
+    Bshp = mps_tensor_shape(d, D)
+    vecA = vec(mps_tensor(M))
+
+    energies = Vector{T}[]
+    tvecs = Vector{puMPSTvec{T}}[]
+    ks_rep = Vector{Tk}[]
+
+    for (idx, k) in enumerate(ks)
+        Gmat = reshape(Gs[idx], (par_full, par_full))
+        Heff = reshape(Heffs[idx], (par_full, par_full))
+        Gmat = (Gmat + Gmat') / 2
+        Heff = (Heff + Heff') / 2
+
+        Gsub = Gmat[allowed, allowed]
+        Heff_sub = Heff[allowed, allowed]
+        GiH = pinv(Gsub, pinv_tol) * Heff_sub
+        guess = vecA[allowed]
+
+        ev, eV, info = eigsolve(GiH, guess, num_states[idx], :LM)
+        info.converged < num_states[idx] && @warn "$(num_states[idx] - info.converged) eigenvectors did not converge after $(info.numiter) iterations"
+
+        states_k = puMPSTvec{T}[]
+        for v in eV
+            Bnrm = sqrt(real(dot(v, Gsub * v)))
+            rmul!(v, 1 / Bnrm)
+            full_v = zeros(T, par_full)
+            full_v[allowed] .= v
+            Bc_mat = reshape(full_v, (D*d, D))
+            Bl = Bc_mat * lambda_i
+            Bl = reshape(Bl, Bshp)
+            push!(states_k, puMPSTvec{T}(M, Bl, k))
+        end
+
+        push!(energies, ev)
+        push!(tvecs, states_k)
+        push!(ks_rep, repeat(ks[idx:idx], inner=length(ev)))
+    end
+
+    vcat(energies...), vcat(ks_rep...), vcat(tvecs...)
+end
+
 """
     excitations!(M::puMPState{T}, H::Union{MPO_PBC_uniform{T}, MPO_PBC_uniform_split{T}}, ks::AbstractVector{<:Real}, num_states::AbstractVector{<:Integer}; pinv_tol::Real=1e-10) where {T}
 
@@ -899,6 +950,19 @@ function excitations!(M::puMPState{T}, H::Union{MPO_PBC_uniform{T}, MPO_PBC_unif
     tspace_ops_to_center_gauge!(Heffs, lambda_i)
 
     excitations(M, Gs, Heffs, lambda_i, ks, num_states, pinv_tol=pinv_tol)
+end
+
+function excitations_parity!(M::puMPState{T}, H::Union{MPO_PBC_uniform{T}, MPO_PBC_uniform_split{T}},
+                             ks::AbstractVector{<:Real}, num_states::AbstractVector{<:Integer};
+                             parity::Int=-1, pinv_tol::Real=1e-10) where {T}
+    parity in (-1, 1) || throw(ArgumentError("parity must be ±1, got $parity"))
+    M, lambda, lambda_i = canonicalize_left!(M)
+    lambda_i = Matrix(lambda_i)
+    Gs, Heffs = tangent_space_metric_and_MPO(M, H, ks, lambda_i)
+    tspace_ops_to_center_gauge!(Gs, lambda_i)
+    tspace_ops_to_center_gauge!(Heffs, lambda_i)
+    allowed = parity_allowed_indices(M, parity)
+    solve_projected_eigs(M, Gs, Heffs, lambda_i, ks, num_states, allowed; pinv_tol=pinv_tol)
 end
 
 function excitations(M::puMPState{T}, Gs::Vector{Array{T,6}}, Heffs::Vector{Array{T,6}}, lambda_i::Matrix{T},
@@ -943,6 +1007,45 @@ function excitations(M::puMPState{T}, Gs::Vector{Array{T,6}}, Heffs::Vector{Arra
     end
 
     vcat(ens...), vcat(ks_rep...), vcat(exs...)
+end
+
+function apply_Z_to_MPO_tensor(t::MPOTensor{T}) where {T}
+    d = size(t, 2)  # physical dimension
+    Z = Matrix{T}(I, d, d)
+    Z[2,2] *= -one(T)   # Z = diag(1, -1)
+
+    res = similar(t)
+    @tensor res[m1,p,m2,q] := Z[p,r] * t[m1,r,m2,s] * Z[q,s]
+    #          ↑ apply on ket          ↑ apply on bra
+
+    return res
+end
+
+
+function build_twisted_NH(M::puMPState{T}, H::MPO_PBC_uniform_split{T},
+                          ks::AbstractVector{<:Real}, lambda_i::Matrix{T}) where {T}
+    op_bulk, op_boundary = H
+    boundary_twisted = MPOTensor{T}[copy(op_boundary[j]) for j in 1:length(op_boundary)]
+    boundary_twisted[1] = apply_Z_to_MPO_tensor(boundary_twisted[1])
+    tangent_space_metric_and_MPO(M, (op_bulk, boundary_twisted), ks, lambda_i)
+end
+
+function build_twisted_NH(M::puMPState{T}, H::MPO_PBC_uniform{T},
+                          ks::AbstractVector{<:Real}, lambda_i::Matrix{T}) where {T}
+    tangent_space_metric_and_MPO(M, H, ks, lambda_i)
+end
+
+function excitations_twisted!(M::puMPState{T}, H::Union{MPO_PBC_uniform{T}, MPO_PBC_uniform_split{T}},
+                              ks::AbstractVector{<:Real}, num_states::AbstractVector{<:Integer};
+                              parity::Int=-1, pinv_tol::Real=1e-10) where {T}
+    parity in (-1, 1) || throw(ArgumentError("parity must be ±1, got $parity"))
+    M, lambda, lambda_i = canonicalize_left!(M)
+    lambda_i = Matrix(lambda_i)
+    Gs, Heffs = build_twisted_NH(M, H, ks, lambda_i)
+    tspace_ops_to_center_gauge!(Gs, lambda_i)
+    tspace_ops_to_center_gauge!(Heffs, lambda_i)
+    allowed = parity_allowed_indices(M, parity)
+    solve_projected_eigs(M, Gs, Heffs, lambda_i, ks, num_states, allowed; pinv_tol=pinv_tol)
 end
 
 """

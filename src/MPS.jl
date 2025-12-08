@@ -6,6 +6,10 @@ using TensorOperations
 using LinearMaps
 using KrylovKit
 
+# Patch for newer Julia / TensorOperations: define scalar used in MPS.tr
+scalar(x::Number) = x
+scalar(x::AbstractArray{T,0}) where {T} = x[]
+
 export MPSTensor, bond_dim, bond_dim_L, bond_dim_R, phys_dim, mps_tensor, mps_tensor_shape, 
        rand_MPSTensor_unitary, rand_MPSTensor,
        MPS_TM, TM_dense, eyeTM, TM_dense_op_nn, 
