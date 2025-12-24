@@ -53,8 +53,8 @@ function compute_lowest_states(N::Int; D::Int=ISING_D, verbose::Bool=false)
     M = PM.rand_puMPState(ComplexF64, 2, D, N)
     optimize_state!(M, Hloc)
 
-    ks = [ -1, 0, 1]
-    num_states = [3, 6, 3]
+    ks = [0]
+    num_states = [3]
     ens, ks_full, exs = suppress_output(() -> PM.excitations!(M, Hsplit, ks, num_states))
 
     energies = real.(ens)
@@ -134,11 +134,6 @@ function save_conformal_tower_plot(data, dir::AbstractString)
     end
 end
 
-Ns = [16,18,20]
-ratio_info = ratio_scaling_analysis(Ns)
-results_path = joinpath(@__DIR__, "ising_ratio_results.txt")
-save_ratio_results(results_path, ratio_info)
-save_conformal_tower_plot(ratio_info.raw, @__DIR__)
 
 function plot_conformal_tower(periodic, v_est; outfile=joinpath(@__DIR__, "ising_tower.png"))
     energies = periodic.energies
@@ -276,6 +271,128 @@ function reduced_density_matrix_first_block(Tvec::PM.puMPSTvec{T}, ℓ::Int, N::
     reduced_density_matrix_from_vector(ψ, ℓ, N)
 end
 
+"""
+    reduced_density_matrix_subsystem(ψ, subset, T; d=2)
+
+Return the reduced density matrix ρ_subset for a pure state vector `ψ`
+on `T` sites (local dimension `d`), tracing out all sites not in `subset`.
+
+- `ψ` is a complex vector of length d^T
+- `subset` is a vector of site indices (1-based, between 1 and T)
+"""
+function reduced_density_matrix_subsystem(ψ::AbstractVector{S},
+                                          subset::Vector{Int},
+                                          T::Int; d::Int=2) where {S<:Complex}
+    # Basic checks
+    length(ψ) == d^T ||
+        error("State vector length $(length(ψ)) incompatible with T=$T and d=$d.")
+    all(1 .<= subset .<= T) ||
+        error("Subset indices must be between 1 and T.")
+
+    m = length(subset)
+    dim_A = d^m
+    dim_tot = d^T
+    dim_B = div(dim_tot, dim_A)
+
+    # Reshape ψ into rank-T tensor
+    shape = ntuple(_ -> d, T)  # (d,d,...,d) length T
+    φ = reshape(ψ, shape)
+
+    # Build permutation: [subset..., complement...]
+    all_sites = collect(1:T)
+    complement = setdiff(all_sites, subset)
+    perm = vcat(subset, complement)
+
+    # Permute so that subset sits in the first m indices
+    φ_perm = permutedims(φ, perm)
+
+    # Reshape to (dim_A, dim_B)
+    φ_mat = reshape(φ_perm, dim_A, dim_B)
+
+    # Partial trace over complement: ρ_A = φ φ†
+    ρ = φ_mat * φ_mat'
+    ρ ./= real(tr(ρ))   # normalize numerically
+
+    return ρ
+end
+
+"""
+    entropy_from_rho(ρ; base=2)
+
+Von Neumann entropy S(ρ) = -Tr(ρ log ρ) in the given logarithm base (default base 2).
+Assumes ρ is positive semidefinite; small negatives from numerics are clipped to zero.
+"""
+function entropy_from_rho(ρ::AbstractMatrix{T}; base::Real=2) where {T<:Complex}
+    vals = eigvals(Hermitian(ρ))
+    λ = real.(vals)
+    λ .= max.(λ, 0.0)              # clip small negative eigenvalues
+    s = sum(λ)
+    s ≈ 0 && return 0.0
+    λ ./= s                         # renormalize
+
+    mask = λ .> 0
+    λnz = λ[mask]
+    return -sum(λnz .* (log.(λnz) ./ log(base)))
+end
+
+"""
+    entropy_subsystem(ψ, subset, T; d=2, base=2)
+
+Von Neumann entropy of the reduced density matrix on `subset`
+for a pure state vector `ψ` on `T` sites.
+"""
+function entropy_subsystem(ψ::AbstractVector{S},
+                           subset::Vector{Int},
+                           T::Int; d::Int=2, base::Real=2) where {S<:Complex}
+    ρA = reduced_density_matrix_subsystem(ψ, subset, T; d=d)
+    return entropy_from_rho(ρA; base=base)
+end
+
+
+"""
+    mutual_information(ψ, A, C, T; d=2, base=2)
+
+Mutual information I(A:C) = S(A) + S(C) - S(A ∪ C)
+for a pure state vector ψ on T sites.
+
+- `A`, `C` are vectors of site indices (1-based).
+"""
+function mutual_information(ψ::AbstractVector{S},
+                            A::Vector{Int},
+                            C::Vector{Int},
+                            T::Int; d::Int=2, base::Real=2) where {S<:Complex}
+    SA = entropy_subsystem(ψ, A, T; d=d, base=base)
+    SC = entropy_subsystem(ψ, C, T; d=d, base=base)
+    AC = sort(union(A, C))
+    SAC = entropy_subsystem(ψ, AC, T; d=d, base=base)
+    return SA + SC - SAC
+end
+
+"""
+    conditional_mutual_information(ψ, A, B, C, T; d=2, base=2)
+
+Conditional mutual information I(A:C|B) =
+S(A ∪ B) + S(B ∪ C) - S(B) - S(A ∪ B ∪ C).
+For a pure global state, this equals I(A:C) if ABC is the whole system.
+"""
+function conditional_mutual_information(ψ::AbstractVector{S},
+                                        A::Vector{Int},
+                                        B::Vector{Int},
+                                        C::Vector{Int},
+                                        T::Int; d::Int=2, base::Real=2) where {S<:Complex}
+    A  = sort(A)
+    C  = sort(C)
+    #ABC = sort(union(AB, C))
+    AC = sort(union(A, C))
+    SA  = entropy_subsystem(ψ, A,  T; d=d, base=base)
+    SC  = entropy_subsystem(ψ, C,  T; d=d, base=base)
+    SAC   = entropy_subsystem(ψ, AC,   T; d=d, base=base)
+    #SABC = entropy_subsystem(ψ, ABC, T; d=d, base=base)
+
+    return SA + SC - SAC
+end
+
+
 function matrix_log_hermitian(ρ::AbstractMatrix{T}; eps::Float64=1e-12) where {T<:Complex}
     vals, vecs = eigen(Hermitian(ρ))
     log_vals = similar(vals)
@@ -387,28 +504,15 @@ function save_relative_entropy_results(path::AbstractString, rel_infos::Vector)
     end
 end
 
-rel_entries = NamedTuple[]
-for N in Ns
-    rel_data = compute_lowest_states(N; D=ISING_D, verbose=false)
-    idxs = rel_data.indices
-    M0 = rel_data.state
-    M1 = rel_data.exs[idxs[2]]
-    M2 = rel_data.exs[idxs[3]]
-    ℓ_max = min(6, N)
-    rel_info = analyze_relative_entropy_Q1(M0, M1, M2; ℓ_max=ℓ_max, N=N,
-                                           outfile=joinpath(@__DIR__, "Srel_Q1_vs_x_N$(N).png"))
-    push!(rel_entries, (N=N, info=rel_info))
-end
-rel_results_path = joinpath(@__DIR__, "ising_relative_entropy.txt")
-save_relative_entropy_results(rel_results_path, rel_entries)
+
 
 function check_rdm_consistency(N::Int; ℓ_max::Int=2, D::Int=ISING_D)
     Hloc = ising_local_MPO(ComplexF64)
     M = PM.rand_puMPState(ComplexF64, 2, D, N)
     optimize_state!(M, Hloc)
 
-    # brute-force vector (小 N 的时候用来验证)
-    ψ = Vector(PM.puMPSTvec(M))  # 如果库里有类似的接口，用它拿到 full state
+    # brute-force vector
+    ψ = Vector(M)  
 
     for ℓ in 1:ℓ_max
         ρ_vec = reduced_density_matrix_from_vector(ψ, ℓ, N)
@@ -422,3 +526,169 @@ end
 
 
 # check_reduced_dm_consistency(8; D=ISING_D, ℓs=[1,2])
+
+
+############################################################
+# Helper: maximally entangled purification for a pair of states
+############################################################
+
+"""
+    max_purification(ψa, ψb)
+
+Given two normalized states ψa, ψb (length 2^N), build a maximally
+entangled purification on QR:
+
+    |ψ_max⟩ = ( |ψ_a⟩⊗|0⟩ + |φ_b⟩⊗|1⟩ ) / √2
+
+where |φ_b⟩ is the component of |ψ_b⟩ orthogonal to |ψ_a⟩.
+The output lives on N+1 sites (dimension 2^(N+1)).
+"""
+function max_purification(ψa::Vector{ComplexF64},
+                          ψb::Vector{ComplexF64})
+    # Ensure both are normalized
+    ψa_norm = norm(ψa)
+    ψb_norm = norm(ψb)
+    ψa_norm ≈ 0 && error("ψa has zero norm.")
+    ψb_norm ≈ 0 && error("ψb has zero norm.")
+    ψa = ψa ./ ψa_norm
+    ψb = ψb ./ ψb_norm
+
+    # Gram-Schmidt: make φ_b orthogonal to ψ_a
+    proj = dot(conj.(ψa), ψb)
+    φb = ψb .- proj .* ψa
+    nb = norm(φb)
+    nb < 1e-12 && error("ψa and ψb are (almost) linearly dependent.")
+    φb ./= nb
+
+    ket0 = ComplexF64[1.0, 0.0]
+    ket1 = ComplexF64[0.0, 1.0]
+
+    ψa0 = kron(ψa, ket0)
+    φb1 = kron(φb, ket1)
+    ψmax = (ψa0 .+ φb1) ./ sqrt(2.0)
+
+    return ψmax
+end
+
+############################################################
+# Helper: compute I(Q₁ : R) vs ℓ for a single pair of primaries
+############################################################
+
+"""
+    analyze_I_Q1R_pair(ψa, ψb, N; ℓ_max, base=2)
+
+Given two states ψa, ψb on N spins (dimension 2^N),
+build the maximally entangled purification ψ_max on N+1 sites and
+compute the mutual information
+
+    I(Q₁ : R)
+
+for Q₁ = {1,…,ℓ} and R = {N+1}, for ℓ = 1,…,ℓ_max.
+
+Returns:
+    (ℓs = 1:ℓ_max, xs = ℓs ./ N, Ivals = I(Q₁:R) for each ℓ)
+"""
+function analyze_I_Q1R_pair(ψa::Vector{ComplexF64},
+                            ψb::Vector{ComplexF64},
+                            N::Int; ℓ_max::Int,
+                            base::Real = 2)
+    # Build purification on N+1 sites
+    ψmax = max_purification(ψa, ψb)
+    T = N + 1               # total sites (physical + reference)
+    ref_site = T            # reference is the last site
+
+    ℓs = collect(1:ℓ_max)
+    xs = [ℓ / N for ℓ in ℓs]
+    Ivals = zeros(Float64, ℓ_max)
+
+    for (i, ℓ) in enumerate(ℓs)
+        Q1 = collect(1:ℓ)   # Q₁ = first ℓ sites
+        R  = [ref_site]     # reference site
+        Ivals[i] = mutual_information(ψmax, Q1, R, T; base=base)
+    end
+
+    return (ℓs = ℓs, xs = xs, Ivals = Ivals)
+end
+
+function save_I_Q1R_results(path::AbstractString, entries)
+    open(path, "w") do io
+        println(io, "Mutual information I(Q₁ : R) results")
+        println(io, @sprintf("%6s %8s %6s %12s %18s", "N", "pair", "|Q₁|", "x = ℓ/N", "I(Q₁:R)"))
+        println(io, "-"^70)
+        for entry in entries
+            N = entry.N
+            pairs = [("0-1", entry.pair01), ("0-2", entry.pair02), ("1-2", entry.pair12)]
+            for (label, info) in pairs
+                for idx in eachindex(info.ℓs)
+                    ℓ = info.ℓs[idx]
+                    x = info.xs[idx]
+                    Ival = info.Ivals[idx]
+                    println(io, @sprintf("%6d %8s %6d %12.6f %18.10e", N, label, ℓ, x, Ival))
+                end
+            end
+        end
+    end
+end
+
+############################################################
+# Main loop over system sizes: pairs (0,1), (0,2), (1,2)
+############################################################
+Ns = [12,14]
+# ratio_info = ratio_scaling_analysis(Ns)
+# results_path = joinpath(@__DIR__, "ising_ratio_results.txt")
+# save_ratio_results(results_path, ratio_info)
+# save_conformal_tower_plot(ratio_info.raw, @__DIR__)
+
+# rel_entries = NamedTuple[]
+# for N in Ns
+#     rel_data = compute_lowest_states(N; D=ISING_D, verbose=false)
+#     idxs = rel_data.indices
+#     M0 = rel_data.state
+#     M1 = rel_data.exs[idxs[2]]
+#     M2 = rel_data.exs[idxs[3]]
+#     ℓ_max = min(6, N)
+#     rel_info = analyze_relative_entropy_Q1(M0, M1, M2; ℓ_max=ℓ_max, N=N,
+#                                            outfile=joinpath(@__DIR__, "Srel_Q1_vs_x_N$(N).png"))
+#     push!(rel_entries, (N=N, info=rel_info))
+# end
+# rel_results_path = joinpath(@__DIR__, "ising_relative_entropy.txt")
+# save_relative_entropy_results(rel_results_path, rel_entries)
+
+
+mi_entries = NamedTuple[]
+
+for N in Ns
+    # 1. Compute lowest three primaries on this chain
+    rel_data = compute_lowest_states(N; D=ISING_D, verbose=false)
+    idxs = rel_data.indices
+
+    # 0 → vacuum (ground state MPS)
+    M0 = rel_data.state
+
+    # 1 → first excited (sigma), 2 → second excited (epsilon)
+    M1_vec = rel_data.exs[idxs[2]]
+    M2_vec = rel_data.exs[idxs[3]]
+
+    # 2. Convert them to full state vectors on N sites
+    ψ0 = Vector(M0)      # vacuum |0⟩
+    ψ1 = Vector(M1_vec)                # sigma  |1⟩
+    ψ2 = Vector(M2_vec)                # epsilon|2⟩
+
+    # 3. Choose maximum block size
+    ℓ_max = min(6, N)
+
+    # 4. Analyze all three pairs: (0,1), (0,2), (1,2)
+    info01 = analyze_I_Q1R_pair(ψ0, ψ1, N; ℓ_max=ℓ_max)  # vacuum–sigma
+    info02 = analyze_I_Q1R_pair(ψ0, ψ2, N; ℓ_max=ℓ_max)  # vacuum–epsilon
+    info12 = analyze_I_Q1R_pair(ψ1, ψ2, N; ℓ_max=ℓ_max)  # sigma–epsilon
+
+    push!(mi_entries, (
+        N    = N,
+        pair01 = info01,  # (0,1)
+        pair02 = info02,  # (0,2)
+        pair12 = info12   # (1,2)
+    ))
+end
+
+mi_results_path = joinpath(@__DIR__, "ising_I_Q1R_results.txt")
+save_I_Q1R_results(mi_results_path, mi_entries)
