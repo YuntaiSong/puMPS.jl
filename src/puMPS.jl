@@ -10,10 +10,6 @@ using Optim
 include("MPS.jl")
 using .MPS
 
-# Patch for newer Julia / TensorOperations: define scalar used in MPS.tr
-MPS.scalar(x::Number) = x
-MPS.scalar(x::AbstractArray{T,0}) where {T} = x[]
-
 export puMPState, rand_puMPState, mps_tensor, num_sites, bond_dim, phys_dim, set_mps_tensor!,
        apply_blockTM_l, blockTM_dense,
        expect_nn, expect,

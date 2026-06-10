@@ -78,7 +78,8 @@ function LinearAlgebra.norm(Tvec::puMPSTvec{T}) where {T}
         TBs = applyTM_l!(TBs, A, A, TBs, work)
 
         TAB = applyTM_l!(TMres, B, A, TA, work)
-        axpy!(cis(p*n), TAB, TBs) #Add to complete terms (containing both B's)
+        # Relative phase to the fixed bra insertion at site 1.
+        axpy!(cis(p*(n-1)), TAB, TBs) #Add to complete terms (containing both B's)
 
         TA = applyTM_l!(TA, A, A, TA, work)
     end

@@ -1,0 +1,25 @@
+Ising primary identification from exact diagonalization
+     N      state      BC            k       parity  Δ (ε units)
+------------------------------------------------------------------------
+     8          I     PBC     0.000000     1.000000     0.000000
+     8      sigma     PBC     0.000000    -1.000000     0.126213
+     8    epsilon     PBC     0.000000     1.000000     1.000000
+     8        psi    APBC     0.500000    -1.000000     0.500000
+     8     psibar    APBC    -0.500000    -1.000000     0.500000
+    10          I     PBC     0.000000     1.000000     0.000000
+    10      sigma     PBC     0.000000    -1.000000     0.125774
+    10    epsilon     PBC     0.000000     1.000000     1.000000
+    10        psi    APBC     0.500000    -1.000000     0.500000
+    10     psibar    APBC    -0.500000    -1.000000     0.500000
+    12          I     PBC     0.000000     1.000000     0.000000
+    12      sigma     PBC     0.000000    -1.000000     0.125537
+    12    epsilon     PBC     0.000000     1.000000     1.000000
+    12        psi    APBC     0.500000    -1.000000     0.500000
+    12     psibar    APBC    -0.500000    -1.000000     0.500000
+
+Expected primary data:
+  I:      PBC,  k=0,    parity=+1, Δ=0
+  sigma:  PBC,  k=0,    parity=-1, Δ=1/8
+  epsilon:PBC,  k=0,    parity=+1, Δ=1
+  psi:    APBC, k=+1/2, parity=-1, Δ=1/2
+  psibar: APBC, k=-1/2, parity=-1, Δ=1/2
